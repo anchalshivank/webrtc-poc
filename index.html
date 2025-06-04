@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P WebRTC Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            font-weight: bold;
+            text-align: center;
+        }
+        .status.connecting { background: rgba(255, 193, 7, 0.3); }
+        .status.connected { background: rgba(40, 167, 69, 0.3); }
+        .status.error { background: rgba(220, 53, 69, 0.3); }
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            flex: 1;
+            min-width: 120px;
+        }
+        button:hover {
+            background: rgba(255, 255, 255, 1);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .message-area {
+            margin: 20px 0;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            margin: 5px 0;
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            box-sizing: border-box;
+        }
+        .log {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 8px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 20px 0;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .peer-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .peer-box {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 8px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+        .messages {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 8px;
+            min-height: 100px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌐 P2P WebRTC Demo</h1>
+        
+        <div class="peer-info">
+            <div class="peer-box">
+                <h3>📡 Tracker Status</h3>
+                <div id="trackerStatus" class="status connecting">Disconnected</div>
+            </div>
+            <div class="peer-box">
+                <h3>🤝 P2P Connection</h3>
+                <div id="p2pStatus" class="status connecting">Not Connected</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="connectBtn" onclick="connectToTracker()">Connect to Tracker</button>
+            <button id="announceBtn" onclick="announceToTracker()" disabled>Announce</button>
+            <button id="createOfferBtn" onclick="createOffer()" disabled>Create Offer</button>
+        </div>
+
+        <div class="message-area">
+            <h3>💬 Send P2P Message</h3>
+            <input type="text" id="messageInput" placeholder="Type your message..." disabled>
+            <button onclick="sendMessage()" disabled id="sendBtn">Send Message</button>
+        </div>
+
+        <div class="messages">
+            <h3>📨 Received Messages</h3>
+            <div id="messagesList"></div>
+        </div>
+
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        // Global variables
+        let ws = null;
+        let pc = null;
+        let dataChannel = null;
+        const peerId = generatePeerId();
+        const infoHash = "59ceb0d37467cebf56f7b79309a644ea68b76bc7";
+        const trackerUrl = "wss://tracker.openwebtorrent.com";
+        
+        // STUN servers for NAT traversal
+        const iceServers = [
+            { urls: 'stun:stun.cloudflare.com' },
+            { urls: 'stun:stun.l.google.com:19302' }
+        ];
+
+        function generatePeerId() {
+            return Array.from({length: 20}, () => 
+                Math.floor(Math.random() * 16).toString(16)
+            ).join('');
+        }
+
+        function log(message) {
+            const logEl = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logEl.innerHTML += `[${timestamp}] ${message}\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+            console.log(message);
+        }
+
+        function updateStatus(elementId, status, className) {
+            const el = document.getElementById(elementId);
+            el.textContent = status;
+            el.className = `status ${className}`;
+        }
+
+        function connectToTracker() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                log("Already connected to tracker");
+                return;
+            }
+
+            log(`Connecting to tracker: ${trackerUrl}`);
+            updateStatus('trackerStatus', 'Connecting...', 'connecting');
+            
+            ws = new WebSocket(trackerUrl);
+            
+            ws.onopen = () => {
+                log("✅ Connected to WebTorrent tracker");
+                updateStatus('trackerStatus', 'Connected', 'connected');
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('announceBtn').disabled = false;
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    log(`📨 Received: ${JSON.stringify(data)}`);
+                    handleTrackerMessage(data);
+                } catch (e) {
+                    log(`❌ Failed to parse message: ${event.data}`);
+                }
+            };
+            
+            ws.onclose = () => {
+                log("❌ Tracker connection closed");
+                updateStatus('trackerStatus', 'Disconnected', 'error');
+                document.getElementById('connectBtn').disabled = false;
+                document.getElementById('announceBtn').disabled = true;
+            };
+            
+            ws.onerror = (error) => {
+                log(`❌ Tracker error: ${error}`);
+                updateStatus('trackerStatus', 'Error', 'error');
+            };
+        }
+
+        function announceToTracker() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log("❌ Not connected to tracker");
+                return;
+            }
+
+            const announceMsg = {
+                action: "announce",
+                info_hash: infoHash,
+                peer_id: peerId,
+                port: 6881,
+                uploaded: 0,
+                downloaded: 0,
+                left: 0,
+                event: "started"
+            };
+
+            log(`📤 Announcing to tracker with peer_id: ${peerId}`);
+            ws.send(JSON.stringify(announceMsg));
+            document.getElementById('createOfferBtn').disabled = false;
+        }
+
+        function createOffer() {
+            if (pc) {
+                log("❌ WebRTC connection already exists");
+                return;
+            }
+
+            log("🚀 Creating WebRTC peer connection...");
+            setupWebRTC();
+            
+            pc.createOffer()
+                .then(offer => {
+                    log("📝 Created WebRTC offer");
+                    return pc.setLocalDescription(offer);
+                })
+                .then(() => {
+                    const offerMsg = {
+                        action: "offer",
+                        info_hash: infoHash,
+                        peer_id: peerId,
+                        offer: pc.localDescription
+                    };
+                    log("📤 Sending offer to tracker");
+                    ws.send(JSON.stringify(offerMsg));
+                })
+                .catch(error => {
+                    log(`❌ Error creating offer: ${error}`);
+                });
+        }
+
+        function setupWebRTC() {
+            pc = new RTCPeerConnection({ iceServers });
+            
+            // Create data channel
+            dataChannel = pc.createDataChannel("messages", {
+                ordered: true
+            });
+            
+            dataChannel.onopen = () => {
+                log("✅ Data channel opened - P2P connection established!");
+                updateStatus('p2pStatus', 'Connected', 'connected');
+                document.getElementById('messageInput').disabled = false;
+                document.getElementById('sendBtn').disabled = false;
+            };
+            
+            dataChannel.onmessage = (event) => {
+                log(`💬 Received P2P message: ${event.data}`);
+                displayMessage(event.data, false);
+            };
+            
+            dataChannel.onclose = () => {
+                log("❌ Data channel closed");
+                updateStatus('p2pStatus', 'Disconnected', 'error');
+            };
+
+            // Handle incoming data channels
+            pc.ondatachannel = (event) => {
+                const channel = event.channel;
+                log("📨 Received data channel");
+                
+                channel.onopen = () => {
+                    log("✅ Incoming data channel opened");
+                    updateStatus('p2pStatus', 'Connected', 'connected');
+                    document.getElementById('messageInput').disabled = false;
+                    document.getElementById('sendBtn').disabled = false;
+                    dataChannel = channel; // Use the incoming channel
+                };
+                
+                channel.onmessage = (event) => {
+                    log(`💬 Received P2P message: ${event.data}`);
+                    displayMessage(event.data, false);
+                };
+            };
+
+            // ICE candidate handling
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    log("🧊 ICE candidate generated");
+                }
+            };
+
+            pc.onconnectionstatechange = () => {
+                log(`🔗 Connection state: ${pc.connectionState}`);
+                if (pc.connectionState === 'connected') {
+                    updateStatus('p2pStatus', 'Connected', 'connected');
+                } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                    updateStatus('p2pStatus', 'Disconnected', 'error');
+                }
+            };
+        }
+
+        function handleTrackerMessage(data) {
+            switch (data.action) {
+                case 'announce':
+                    log(`📊 Tracker stats - Complete: ${data.complete}, Incomplete: ${data.incomplete}`);
+                    break;
+                    
+                case 'offer':
+                    log("📨 Received WebRTC offer from peer");
+                    handleOffer(data);
+                    break;
+                    
+                case 'answer':
+                    log("📨 Received WebRTC answer from peer");
+                    handleAnswer(data);
+                    break;
+                    
+                default:
+                    log(`❓ Unknown message type: ${data.action}`);
+            }
+        }
+
+        function handleOffer(data) {
+            if (!pc) {
+                log("🚀 Setting up WebRTC for incoming offer...");
+                setupWebRTC();
+            }
+
+            pc.setRemoteDescription(data.offer)
+                .then(() => {
+                    log("✅ Set remote description from offer");
+                    return pc.createAnswer();
+                })
+                .then(answer => {
+                    log("📝 Created WebRTC answer");
+                    return pc.setLocalDescription(answer);
+                })
+                .then(() => {
+                    const answerMsg = {
+                        action: "answer",
+                        info_hash: infoHash,
+                        peer_id: peerId,
+                        to_peer_id: data.peer_id,
+                        answer: pc.localDescription
+                    };
+                    log("📤 Sending answer to tracker");
+                    ws.send(JSON.stringify(answerMsg));
+                })
+                .catch(error => {
+                    log(`❌ Error handling offer: ${error}`);
+                });
+        }
+
+        function handleAnswer(data) {
+            if (!pc) {
+                log("❌ No peer connection for answer");
+                return;
+            }
+
+            pc.setRemoteDescription(data.answer)
+                .then(() => {
+                    log("✅ Set remote description from answer");
+                })
+                .catch(error => {
+                    log(`❌ Error handling answer: ${error}`);
+                });
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            
+            if (!dataChannel || dataChannel.readyState !== 'open') {
+                log("❌ Data channel not open");
+                return;
+            }
+
+            try {
+                dataChannel.send(message);
+                log(`📤 Sent P2P message: ${message}`);
+                displayMessage(message, true);
+                input.value = '';
+            } catch (error) {
+                log(`❌ Error sending message: ${error}`);
+            }
+        }
+
+        function displayMessage(message, isSent) {
+            const messagesList = document.getElementById('messagesList');
+            const messageEl = document.createElement('div');
+            messageEl.style.cssText = `
+                margin: 8px 0;
+                padding: 8px 12px;
+                border-radius: 12px;
+                max-width: 70%;
+                word-wrap: break-word;
+                ${isSent ? 
+                    'background: rgba(0, 123, 255, 0.3); margin-left: auto; text-align: right;' : 
+                    'background: rgba(40, 167, 69, 0.3); margin-right: auto;'
+                }
+            `;
+            messageEl.textContent = `${isSent ? 'You' : 'Peer'}: ${message}`;
+            messagesList.appendChild(messageEl);
+            messagesList.scrollTop = messagesList.scrollHeight;
+        }
+
+        // Allow Enter key to send messages
+        document.getElementById('messageInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // Initialize
+        log(`🚀 P2P Demo initialized with peer_id: ${peerId}`);
+        log(`📋 Info hash: ${infoHash}`);
+        log("📖 Instructions:");
+        log("1. Click 'Connect to Tracker'");
+        log("2. Click 'Announce' to register with tracker");
+        log("3. Open this page in another tab/window");
+        log("4. Repeat steps 1-2 in the second tab");
+        log("5. Click 'Create Offer' in ONE of the tabs");
+        log("6. Wait for P2P connection to establish");
+        log("7. Start sending messages!");
+    </script>
+</body>
+</html>
