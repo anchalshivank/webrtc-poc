@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC BitTorrent Tracker P2P Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f0f0f0;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .log {
+            background: #000;
+            color: #0f0;
+            padding: 10px;
+            border-radius: 5px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .status.connecting {
+            background: #fff3cd;
+            color: #856404;
+        }
+        input[type="text"] {
+            width: 300px;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 5px;
+        }
+        select {
+            width: 320px;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 5px;
+        }
+        .peer-info {
+            background: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 5px 0;
+        }
+        .json-log {
+            background: #001122;
+            color: #00ff88;
+            padding: 10px;
+            border-radius: 5px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 11px;
+            white-space: pre-wrap;
+            border: 1px solid #333;
+        }
+        .connection-status {
+            background: #e3f2fd;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border-left: 4px solid #2196f3;
+        }
+        .chat-container {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .chat-message {
+            margin: 5px 0;
+            padding: 8px;
+            border-radius: 3px;
+        }
+        .chat-message.sent {
+            background: #e3f2fd;
+            text-align: right;
+        }
+        .chat-message.received {
+            background: #f3e5f5;
+        }
+        .file-transfer {
+            background: #fff3cd;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border-left: 4px solid #ffc107;
+        }
+        .peer-list {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 5px 0;
+        }
+        .peer-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .peer-item:last-child {
+            border-bottom: none;
+        }
+        .peer-status {
+            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+        .peer-status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .peer-status.connecting {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .peer-status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .stats {
+            background: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        .stat-item {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔥 WebRTC P2P BitTorrent Tracker Demo</h1>
+        <p>Complete peer-to-peer communication using BitTorrent trackers for WebRTC signaling.</p>
+        
+        <div class="status" id="status">Disconnected</div>
+        
+        <div class="controls">
+            <div>
+                <label>Tracker URL:</label>
+                <select id="trackerUrl">
+                    <option value="wss://tracker.openwebtorrent.com">wss://tracker.openwebtorrent.com</option>
+                    <option value="wss://tracker.files.fm:7073">wss://tracker.files.fm:7073</option>
+                    <option value="wss://tracker.webtorrent.dev">wss://tracker.webtorrent.dev</option>
+                </select>
+            </div>
+            
+            <div>
+                <label>Room ID:</label>
+                <input type="text" id="infoHash" value="demo-room-12345678" maxlength="20" />
+                <button onclick="generateRandomId()">New Room</button>
+            </div>
+        </div>
+        
+        <div class="peer-info">
+            <strong>Your Peer ID:</strong> <span id="peerIdDisplay"></span>
+        </div>
+        
+        <div class="controls">
+            <button onclick="connectToTracker()" id="connectBtn">Connect to Tracker</button>
+            <button onclick="joinRoom()" id="joinBtn" disabled>Join Room</button>
+            <button onclick="createOffer()" id="offerBtn" disabled>Create Offer</button>
+            <button onclick="disconnect()" id="disconnectBtn" disabled>Disconnect</button>
+        </div>
+
+        <div class="connection-status" id="connectionStatus">
+            <strong>P2P Status:</strong> <span id="p2pStatus">Not connected</span>
+        </div>
+
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-value" id="connectedPeersCount">0</div>
+                <div class="stat-label">Connected Peers</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="messagesSent">0</div>
+                <div class="stat-label">Messages Sent</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="messagesReceived">0</div>
+                <div class="stat-label">Messages Received</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="dataTransferred">0 KB</div>
+                <div class="stat-label">Data Transferred</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>💬 Chat</h3>
+        <div class="chat-container" id="chatContainer">
+            <div style="text-align: center; color: #666;">No messages yet - connect to peers to start chatting</div>
+        </div>
+        <div class="controls">
+            <input type="text" id="chatMessage" placeholder="Type a message..." onkeypress="handleChatKeyPress(event)" />
+            <button onclick="sendChatMessage()" id="sendChatBtn" disabled>Send</button>
+            <button onclick="sendFile()" id="sendFileBtn" disabled>Send File</button>
+            <input type="file" id="fileInput" style="display: none;" onchange="handleFileSelect(event)" />
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>👥 Peers in Room</h3>
+        <div id="peersList" class="peer-list">
+            <div style="text-align: center; color: #666;">No peers found</div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>📤 Network Messages</h3>
+        <div class="json-log" id="jsonOutput"></div>
+    </div>
+
+    <div class="container">
+        <h3>📝 System Log</h3>
+        <div class="log" id="logOutput"></div>
+    </div>
+
+    <script>
+        // Global variables
+        let p2pClient = null;
+        let messagesSent = 0;
+        let messagesReceived = 0;
+        let dataTransferred = 0;
+
+        // Enhanced WebRTC P2P Client
+        class WebRTCP2PClient {
+            constructor() {
+                this.trackerUrl = null;
+                this.socket = null;
+                this.peerId = this.generateRandomId();
+                this.infoHash = this.generateRandomId();
+                this.peerConnections = new Map();
+                this.dataChannels = new Map();
+                this.connectedPeers = new Set();
+                this.discoveredPeers = new Set();
+                this.announceInterval = null;
+                this.onPeerConnected = null;
+                this.onPeerDisconnected = null;
+                this.onMessageReceived = null;
+                this.onStatusChanged = null;
+                this.onFileReceived = null;
+                
+                // ICE configuration with multiple STUN servers
+                this.iceConfig = {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun.stunprotocol.org:3478' }
+                    ],
+                    iceCandidatePoolSize: 10
+                };
+            }
+
+            generatePeerId() {
+                const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                return Array.from({ length: 20 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+            }
+
+            generateInfoHash() {
+                const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+                return Array.from({ length: 20 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+            }
+            generateRandomId() {
+                const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+                let result = '';
+                for (let i = 0; i < 20; i++) {
+                    result += chars[Math.floor(Math.random() * chars.length)];
+                }
+                return result;
+            }
+
+            stringToBuffer(str) {
+                return new TextEncoder().encode(str);
+            }
+
+            bufferToString(buffer) {
+                return new TextDecoder().decode(buffer);
+            }
+
+            log(message) {
+                console.log(message);
+                const timestamp = new Date().toLocaleTimeString();
+                const logElement = document.getElementById('logOutput');
+                if (logElement) {
+                    logElement.textContent += `[${timestamp}] ${message}\n`;
+                    logElement.scrollTop = logElement.scrollHeight;
+                }
+            }
+
+            logJson(direction, message) {
+                const jsonElement = document.getElementById('jsonOutput');
+                if (jsonElement) {
+                    const timestamp = new Date().toLocaleTimeString();
+                    const formatted = JSON.stringify(message, null, 2);
+                    jsonElement.textContent += `\n[${timestamp}] ${direction}:\n${formatted}\n${'='.repeat(50)}\n`;
+                    jsonElement.scrollTop = jsonElement.scrollHeight;
+                }
+            }
+
+            updateStats() {
+                document.getElementById('connectedPeersCount').textContent = this.connectedPeers.size;
+                document.getElementById('messagesSent').textContent = messagesSent;
+                document.getElementById('messagesReceived').textContent = messagesReceived;
+                document.getElementById('dataTransferred').textContent = (dataTransferred / 1024).toFixed(2) + ' KB';
+            }
+
+            updateStatus(status, className = 'disconnected') {
+                const statusEl = document.getElementById('status');
+                if (statusEl) {
+                    statusEl.textContent = status;
+                    statusEl.className = `status ${className}`;
+                }
+            }
+
+            updateP2PStatus(status) {
+                const statusEl = document.getElementById('p2pStatus');
+                if (statusEl) {
+                    statusEl.textContent = status;
+                }
+            }
+
+            addChatMessage(message, type, fromPeer = null) {
+                const chatContainer = document.getElementById('chatContainer');
+                const messageEl = document.createElement('div');
+                messageEl.className = `chat-message ${type}`;
+                
+                if (type === 'received' && fromPeer) {
+                    messageEl.innerHTML = `<small><strong>${fromPeer.substring(0, 8)}...</strong></small><br>${message}`;
+                    messagesReceived++;
+                } else {
+                    messageEl.innerHTML = message;
+                    if (type === 'sent') messagesSent++;
+                }
+                
+                // Clear placeholder text
+                if (chatContainer.children.length === 1 && chatContainer.firstChild.style.textAlign === 'center') {
+                    chatContainer.innerHTML = '';
+                }
+                
+                chatContainer.appendChild(messageEl);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+                this.updateStats();
+            }
+
+            updatePeersList(peers) {
+                const peersListEl = document.getElementById('peersList');
+                if (!peersListEl) return;
+
+                if (!peers || peers.length === 0) {
+                    peersListEl.innerHTML = '<div style="text-align: center; color: #666;">No peers found</div>';
+                    return;
+                }
+
+                peersListEl.innerHTML = '';
+                peers.forEach(peer => {
+                    if (peer.peer_id && peer.peer_id !== this.peerId) {
+                        this.discoveredPeers.add(peer.peer_id);
+                        
+                        const peerEl = document.createElement('div');
+                        peerEl.className = 'peer-item';
+                        
+                        const isConnected = this.connectedPeers.has(peer.peer_id);
+                        const statusClass = isConnected ? 'connected' : 'disconnected';
+                        const statusText = isConnected ? 'Connected' : 'Discovered';
+                        
+                        peerEl.innerHTML = `
+                            <div>
+                                <strong>${peer.peer_id.substring(0, 12)}...</strong>
+                                <div style="font-size: 12px; color: #666;">
+                                    ${peer.ip || 'Unknown IP'}:${peer.port || 'Unknown Port'}
+                                </div>
+                            </div>
+                            <div class="peer-status ${statusClass}">${statusText}</div>
+                        `;
+                        
+                        peersListEl.appendChild(peerEl);
+                    }
+                });
+            }
+
+            async connect(trackerUrl) {
+                this.trackerUrl = trackerUrl;
+                this.updateStatus('Connecting...', 'connecting');
+                
+                return new Promise((resolve, reject) => {
+                    this.socket = new WebSocket(trackerUrl);
+                    
+                    this.socket.onopen = () => {
+                        this.log('✅ Connected to tracker: ' + trackerUrl);
+                        this.updateStatus('Connected to tracker', 'connected');
+                        resolve();
+                    };
+
+                    this.socket.onerror = (error) => {
+                        this.log('❌ Connection error: ' + error);
+                        this.updateStatus('Connection failed', 'disconnected');
+                        reject(error);
+                    };
+
+                    this.socket.onmessage = (event) => {
+                        try {
+                            const message = JSON.parse(event.data);
+                            this.logJson('RECEIVED', message);
+                            this.handleTrackerMessage(message);
+                        } catch (e) {
+                            this.log('❌ Failed to parse message: ' + e.message);
+                        }
+                    };
+
+                    this.socket.onclose = (event) => {
+                        this.log(`🔌 Connection closed. Code: ${event.code}, Reason: ${event.reason}`);
+                        this.updateStatus('Disconnected', 'disconnected');
+                        this.updateP2PStatus('Disconnected');
+                        this.clearAnnounceInterval();
+                    };
+                });
+            }
+
+            sendMessage(message) {
+                if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+                    this.logJson('SENDING', message);
+                    this.socket.send(JSON.stringify(message));
+                    return true;
+                } else {
+                    this.log('❌ Cannot send message - not connected to tracker');
+                    return false;
+                }
+            }
+
+            announceToSwarm(infoHash) {
+                this.infoHash = infoHash;
+                
+                const announceMessage = {
+                    action: 'announce',
+                    info_hash: Array.from(this.stringToBuffer(infoHash)),
+                    peer_id: Array.from(this.stringToBuffer(this.peerId)),
+                    port: 6881,
+                    uploaded: 0,
+                    downloaded: 0,
+                    left: 0,
+                    event: 'started',
+                    numwant: 50,
+                    compact: 0
+                };
+
+                this.log('📢 Announcing to swarm: ' + infoHash);
+                this.sendMessage(announceMessage);
+                this.startPeriodicAnnounce();
+            }
+
+            startPeriodicAnnounce(interval = 30000) {
+                this.clearAnnounceInterval();
+                
+                this.announceInterval = setInterval(() => {
+                    if (this.socket && this.socket.readyState === WebSocket.OPEN && this.infoHash) {
+                        const announceMessage = {
+                            action: 'announce',
+                            info_hash: Array.from(this.stringToBuffer(this.infoHash)),
+                            peer_id: Array.from(this.stringToBuffer(this.peerId)),
+                            port: 6881,
+                            uploaded: 0,
+                            downloaded: 0,
+                            left: 0,
+                            event: 'update',
+                            numwant: 50,
+                            compact: 0
+                        };
+                        this.sendMessage(announceMessage);
+                        this.log('🔄 Periodic announce sent');
+                    }
+                }, interval);
+            }
+
+            clearAnnounceInterval() {
+                if (this.announceInterval) {
+                    clearInterval(this.announceInterval);
+                    this.announceInterval = null;
+                }
+            }
+
+            async createOfferForPeers() {
+                this.log('🚀 Creating WebRTC offers for discovered peers');
+                this.updateP2PStatus('Creating offers...');
+
+                // Create offers for all discovered peers we're not already connected to
+                for (const peerId of this.discoveredPeers) {
+                    if (!this.connectedPeers.has(peerId) && !this.peerConnections.has(peerId)) {
+                        await this.createOfferForPeer(peerId);
+                    }
+                }
+            }
+
+            async createOfferForPeer(remotePeerId) {
+                this.log(`🎯 Creating offer for peer: ${remotePeerId}`);
+                
+                const peerConnection = new RTCPeerConnection(this.iceConfig);
+                this.peerConnections.set(remotePeerId, peerConnection);
+
+                // Create data channel for this peer
+                const dataChannel = peerConnection.createDataChannel('chat', {
+                    ordered: true,
+                    maxRetransmits: 3
+                });
+                
+                this.setupDataChannel(dataChannel, remotePeerId);
+                this.setupPeerConnection(peerConnection, remotePeerId);
+
+                try {
+                    const offer = await peerConnection.createOffer();
+                    await peerConnection.setLocalDescription(offer);
+                    
+                    this.log(`📤 Sending offer to: ${remotePeerId}`);
+                    
+                    const offerMessage = {
+                        action: 'announce',
+                        info_hash: Array.from(this.stringToBuffer(this.infoHash)),
+                        peer_id: Array.from(this.stringToBuffer(this.peerId)),
+                        to_peer_id: remotePeerId,
+                        port: 6881,
+                        uploaded: 0,
+                        downloaded: 0,
+                        left: 0,
+                        event: 'update',
+                        numwant: 0,
+                        compact: 0,
+                        offer: {
+                            type: 'offer',
+                            sdp: offer.sdp
+                        }
+                    };
+
+                    this.sendMessage(offerMessage);
+                } catch (error) {
+                    this.log(`❌ Error creating offer for ${remotePeerId}: ${error.message}`);
+                    this.cleanupPeer(remotePeerId);
+                }
+            }
+
+            setupDataChannel(dataChannel, peerId) {
+                this.dataChannels.set(peerId, dataChannel);
+
+                dataChannel.onopen = () => {
+                    this.log(`📡 Data channel opened with: ${peerId}`);
+                    this.connectedPeers.add(peerId);
+                    this.updateP2PStatus(`Connected to ${this.connectedPeers.size} peer(s)`);
+                    this.updateButtonStates();
+                    this.updateStats();
+                    this.onPeerConnected?.(peerId);
+                };
+
+                dataChannel.onmessage = (event) => {
+                    this.handleDataChannelMessage(event.data, peerId);
+                };
+
+                dataChannel.onclose = () => {
+                    this.log(`📡 Data channel closed with: ${peerId}`);
+                    this.connectedPeers.delete(peerId);
+                    this.updateP2PStatus(this.connectedPeers.size > 0 ? 
+                        `Connected to ${this.connectedPeers.size} peer(s)` : 'Not connected');
+                    this.updateButtonStates();
+                    this.updateStats();
+                    this.onPeerDisconnected?.(peerId);
+                    this.cleanupPeer(peerId);
+                };
+
+                dataChannel.onerror = (error) => {
+                    this.log(`❌ Data channel error with ${peerId}: ${error}`);
+                };
+            }
+
+            setupPeerConnection(peerConnection, peerId) {
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        this.log(`🧊 Sending ICE candidate to: ${peerId}`);
+                        const candidateMessage = {
+                            action: 'announce',
+                            info_hash: Array.from(this.stringToBuffer(this.infoHash)),
+                            peer_id: Array.from(this.stringToBuffer(this.peerId)),
+                            to_peer_id: peerId,
+                            port: 6881,
+                            uploaded: 0,
+                            downloaded: 0,
+                            left: 0,
+                            event: 'update',
+                            numwant: 0,
+                            ice_candidate: event.candidate
+                        };
+                        this.sendMessage(candidateMessage);
+                    }
+                };
+
+                peerConnection.oniceconnectionstatechange = () => {
+                    this.log(`🧊 ICE connection state (${peerId}): ${peerConnection.iceConnectionState}`);
+                    if (peerConnection.iceConnectionState === 'connected' || 
+                        peerConnection.iceConnectionState === 'completed') {
+                        this.log(`✅ ICE connection established with: ${peerId}`);
+                    } else if (peerConnection.iceConnectionState === 'failed' || 
+                               peerConnection.iceConnectionState === 'disconnected' || 
+                               peerConnection.iceConnectionState === 'closed') {
+                        this.log(`❌ ICE connection failed with: ${peerId}`);
+                        this.connectedPeers.delete(peerId);
+                        this.updateP2PStatus(this.connectedPeers.size > 0 ? 
+                            `Connected to ${this.connectedPeers.size} peer(s)` : 'Not connected');
+                        this.updateButtonStates();
+                        this.updateStats();
+                        this.cleanupPeer(peerId);
+                    }
+                };
+
+                peerConnection.ondatachannel = (event) => {
+                    this.log(`📡 Received data channel from: ${peerId}`);
+                    this.setupDataChannel(event.channel, peerId);
+                };
+
+                peerConnection.onconnectionstatechange = () => {
+                    this.log(`🔗 Connection state (${peerId}): ${peerConnection.connectionState}`);
+                };
+            }
+
+            handleDataChannelMessage(data, fromPeer) {
+                try {
+                    const message = JSON.parse(data);
+                    
+                    if (message.type === 'chat') {
+                        this.log(`💬 Chat from ${fromPeer}: ${message.content}`);
+                        this.addChatMessage(message.content, 'received', fromPeer);
+                        this.onMessageReceived?.(message.content, fromPeer);
+                    } else if (message.type === 'file') {
+                        this.log(`📁 File from ${fromPeer}: ${message.name} (${message.size} bytes)`);
+                        this.handleFileMessage(message, fromPeer);
+                    } else {
+                        this.log(`📨 Message from ${fromPeer}: ${data}`);
+                        this.addChatMessage(data, 'received', fromPeer);
+                    }
+                    
+                    dataTransferred += data.length;
+                    this.updateStats();
+                } catch (e) {
+                    // Handle plain text messages
+                    this.log(`📨 Plain message from ${fromPeer}: ${data}`);
+                    this.addChatMessage(data, 'received', fromPeer);
+                    dataTransferred += data.length;
+                    this.updateStats();
+                }
+            }
+
+            handleFileMessage(message, fromPeer) {
+                if (message.type === 'file') {
+                    // Convert base64 back to blob
+                    const byteCharacters = atob(message.data);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const blob = new Blob([byteArray], { type: message.mimeType });
+                    
+                    // Create download link
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = message.name;
+                    a.textContent = `Download ${message.name}`;
+                    
+                    const fileDiv = document.createElement('div');
+                    fileDiv.className = 'chat-message received';
+                    fileDiv.innerHTML = `
+                        <small><strong>${fromPeer.substring(0, 8)}...</strong> sent a file:</small><br>
+                        📁 ${message.name} (${(message.size / 1024).toFixed(2)} KB)<br>
+                    `;
+                    fileDiv.appendChild(a);
+                    
+                    const chatContainer = document.getElementById('chatContainer');
+                    if (chatContainer.children.length === 1 && chatContainer.firstChild.style.textAlign === 'center') {
+                        chatContainer.innerHTML = '';
+                    }
+                    chatContainer.appendChild(fileDiv);
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                    
+                    this.onFileReceived?.(message.name, blob, fromPeer);
+                }
+            }
+
+            async handleOffer(message) {
+                const remotePeerId = this.bufferToString(new Uint8Array(message.peer_id));
+                const offer = message.offer;
+                
+                if (remotePeerId === this.peerId) {
+                    this.log('⚠️ Ignoring offer from ourselves');
+                    return;
+                }
+
+                this.log(`📥 Received offer from: ${remotePeerId}`);
+                
+                if (this.peerConnections.has(remotePeerId)) {
+                    this.log(`⚠️ Already have connection with ${remotePeerId}, ignoring offer`);
+                    return;
+                }
+
+                const peerConnection = new RTCPeerConnection(this.iceConfig);
+                this.peerConnections.set(remotePeerId, peerConnection);
+                this.setupPeerConnection(peerConnection, remotePeerId);
+
+                try {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+
+                    this.log(`📤 Sending answer to: ${remotePeerId}`);
+                    
+                    const answerMessage = {
+                        action: 'announce',
+                        info_hash: Array.from(this.stringToBuffer(this.infoHash)),
+                        peer_id: Array.from(this.stringToBuffer(this.peerId)),
+                        to_peer_id: remotePeerId,
+                        port: 6881,
+                        uploaded: 0,
+                        downloaded: 0,
+                        left: 0,
+                        event: 'update',
+                        numwant: 0,
+                        compact: 0,
+                        answer: {
+                            type: 'answer',
+                            sdp: answer.sdp
+                        }
+                    };
+
+                    this.sendMessage(answerMessage);
+                } catch (error) {
+                    this.log(`❌ Error handling offer from ${remotePeerId}: ${error.message}`);
+                    this.cleanupPeer(remotePeerId);
+                }
+            }
+
+            async handleAnswer(message) {
+                const remotePeerId = this.bufferToString(new Uint8Array(message.peer_id));
+                const answer = message.answer;
+                
+                this.log(`📥 Received answer from: ${remotePeerId}`);
+                
+                const peerConnection = this.peerConnections.get(remotePeerId);
+                if (!peerConnection) {
+                    this.log(`⚠️ No peer connection found for ${remotePeerId}`);
+                    return;
+                }
+
+                try {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+                    this.log(`✅ Set remote description for: ${remotePeerId}`);
+                } catch (error) {
+                    this.log(`❌ Error setting remote description for ${remotePeerId}: ${error.message}`);
+                    this.cleanupPeer(remotePeerId);
+                }
+            }
+
+            async handleIceCandidate(message) {
+                const remotePeerId = this.bufferToString(new Uint8Array(message.peer_id));
+                const candidate = message.ice_candidate;
+                
+                this.log(`🧊 Received ICE candidate from: ${remotePeerId}`);
+                
+                const peerConnection = this.peerConnections.get(remotePeerId);
+                if (!peerConnection) {
+                    this.log(`⚠️ No peer connection found for ${remotePeerId}`);
+                    return;
+                }
+
+                try {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                    this.log(`✅ Added ICE candidate for: ${remotePeerId}`);
+                } catch (error) {
+                    this.log(`❌ Error adding ICE candidate for ${remotePeerId}: ${error.message}`);
+                }
+            }
+
+            handleTrackerMessage(message) {
+                if (message.action === 'announce') {
+                    if (message.peers && Array.isArray(message.peers)) {
+                        this.log(`👥 Received ${message.peers.length} peers from tracker`);
+                        this.updatePeersList(message.peers);
+                    }
+                } else if (message.offer && message.peer_id) {
+                    this.handleOffer(message);
+                } else if (message.answer && message.peer_id) {
+                    this.handleAnswer(message);
+                } else if (message.ice_candidate && message.peer_id) {
+                    this.handleIceCandidate(message);
+                } else if (message.failure_reason) {
+                    this.log(`❌ Tracker error: ${message.failure_reason}`);
+                } else {
+                    this.log(`📨 Unknown message type: ${JSON.stringify(message)}`);
+                }
+            }
+
+            broadcastMessage(message) {
+                if (this.connectedPeers.size === 0) {
+                    this.log('⚠️ No connected peers to send message to');
+                    return false;
+                }
+
+                let sent = 0;
+                for (const peerId of this.connectedPeers) {
+                    const dataChannel = this.dataChannels.get(peerId);
+                    if (dataChannel && dataChannel.readyState === 'open') {
+                        try {
+                            dataChannel.send(JSON.stringify(message));
+                            sent++;
+                        } catch (error) {
+                            this.log(`❌ Error sending message to ${peerId}: ${error.message}`);
+                        }
+                    }
+                }
+
+                this.log(`📤 Sent message to ${sent}/${this.connectedPeers.size} peers`);
+                return sent > 0;
+            }
+
+            sendChatMessage(text) {
+                const message = {
+                    type: 'chat',
+                    content: text,
+                    timestamp: Date.now()
+                };
+
+                if (this.broadcastMessage(message)) {
+                    this.addChatMessage(text, 'sent');
+                    dataTransferred += JSON.stringify(message).length * this.connectedPeers.size;
+                    this.updateStats();
+                    return true;
+                }
+                return false;
+            }
+
+            sendFile(file) {
+                if (!file || this.connectedPeers.size === 0) {
+                    this.log('⚠️ No file selected or no connected peers');
+                    return false;
+                }
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const fileData = e.target.result;
+                    const base64Data = btoa(String.fromCharCode(...new Uint8Array(fileData)));
+                    
+                    const message = {
+                        type: 'file',
+                        name: file.name,
+                        size: file.size,
+                        mimeType: file.type,
+                        data: base64Data,
+                        timestamp: Date.now()
+                    };
+
+                    if (this.broadcastMessage(message)) {
+                        this.addChatMessage(`📁 Sent file: ${file.name} (${(file.size/1024).toFixed(2)} KB)`, 'sent');
+                        dataTransferred += JSON.stringify(message).length * this.connectedPeers.size;
+                        this.updateStats();
+                        this.log(`📁 File sent: ${file.name}`);
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+                return true;
+            }
+
+            cleanupPeer(peerId) {
+                this.log(`🧹 Cleaning up peer: ${peerId}`);
+                
+                // Close data channel
+                const dataChannel = this.dataChannels.get(peerId);
+                if (dataChannel) {
+                    dataChannel.close();
+                    this.dataChannels.delete(peerId);
+                }
+
+                // Close peer connection
+                const peerConnection = this.peerConnections.get(peerId);
+                if (peerConnection) {
+                    peerConnection.close();
+                    this.peerConnections.delete(peerId);
+                }
+
+                // Remove from connected peers
+                this.connectedPeers.delete(peerId);
+                this.updateStats();
+                this.updatePeersList([...this.discoveredPeers].map(id => ({ peer_id: id })));
+            }
+
+            updateButtonStates() {
+                const hasConnections = this.connectedPeers.size > 0;
+                const isConnectedToTracker = this.socket && this.socket.readyState === WebSocket.OPEN;
+                
+                document.getElementById('sendChatBtn').disabled = !hasConnections;
+                document.getElementById('sendFileBtn').disabled = !hasConnections;
+                document.getElementById('offerBtn').disabled = !isConnectedToTracker || this.discoveredPeers.size === 0;
+                document.getElementById('joinBtn').disabled = !isConnectedToTracker;
+                document.getElementById('connectBtn').disabled = isConnectedToTracker;
+                document.getElementById('disconnectBtn').disabled = !isConnectedToTracker;
+            }
+
+            disconnect() {
+                this.log('🔌 Disconnecting from tracker and peers');
+                
+                // Cleanup all peers
+                for (const peerId of this.connectedPeers) {
+                    this.cleanupPeer(peerId);
+                }
+
+                // Clear intervals
+                this.clearAnnounceInterval();
+
+                // Close tracker connection
+                if (this.socket) {
+                    this.socket.close();
+                    this.socket = null;
+                }
+
+                // Reset state
+                this.connectedPeers.clear();
+                this.discoveredPeers.clear();
+                this.peerConnections.clear();
+                this.dataChannels.clear();
+                
+                this.updateStatus('Disconnected', 'disconnected');
+                this.updateP2PStatus('Disconnected');
+                this.updateButtonStates();
+                this.updateStats();
+                this.updatePeersList([]);
+            }
+        }
+
+        // UI Functions
+        function generateRandomId() {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let result = '';
+    for (let i = 0; i < 20; i++) {
+        result += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return result;
+}
+
+        async function connectToTracker() {
+            const trackerUrl = document.getElementById('trackerUrl').value;
+            
+            if (!trackerUrl) {
+                alert('Please select a tracker URL');
+                return;
+            }
+
+            try {
+                p2pClient = new WebRTCP2PClient();
+                
+                // Display peer ID
+                document.getElementById('peerIdDisplay').textContent = p2pClient.peerId;
+                
+                await p2pClient.connect(trackerUrl);
+                p2pClient.updateButtonStates();
+                
+                p2pClient.onPeerConnected = (peerId) => {
+                    console.log('Peer connected:', peerId);
+                    p2pClient.updatePeersList([...p2pClient.discoveredPeers].map(id => ({ peer_id: id })));
+                };
+                
+                p2pClient.onPeerDisconnected = (peerId) => {
+                    console.log('Peer disconnected:', peerId);
+                    p2pClient.updatePeersList([...p2pClient.discoveredPeers].map(id => ({ peer_id: id })));
+                };
+                
+            } catch (error) {
+                alert('Failed to connect to tracker: ' + error.message);
+            }
+        }
+
+        function joinRoom() {
+            const infoHash = document.getElementById('infoHash').value;
+            
+            if (!infoHash) {
+                alert('Please enter a room ID');
+                return;
+            }
+
+            if (!p2pClient) {
+                alert('Please connect to tracker first');
+                return;
+            }
+
+            p2pClient.announceToSwarm(infoHash);
+        }
+
+        function createOffer() {
+            if (!p2pClient) {
+                alert('Please connect to tracker first');
+                return;
+            }
+
+            if (p2pClient.discoveredPeers.size === 0) {
+                alert('No peers discovered yet. Wait for peers to join the room.');
+                return;
+            }
+
+            p2pClient.createOfferForPeers();
+        }
+
+        function sendChatMessage() {
+            const messageInput = document.getElementById('chatMessage');
+            const message = messageInput.value.trim();
+            
+            if (!message) {
+                alert('Please enter a message');
+                return;
+            }
+
+            if (!p2pClient || p2pClient.connectedPeers.size === 0) {
+                alert('No connected peers');
+                return;
+            }
+
+            if (p2pClient.sendChatMessage(message)) {
+                messageInput.value = '';
+            }
+        }
+
+        function handleChatKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendChatMessage();
+            }
+        }
+
+        function sendFile() {
+            document.getElementById('fileInput').click();
+        }
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file && p2pClient) {
+                if (file.size > 5 * 1024 * 1024) { // 5MB limit
+                    alert('File too large. Maximum size is 5MB.');
+                    return;
+                }
+                p2pClient.sendFile(file);
+            }
+        }
+
+        function disconnect() {
+            if (p2pClient) {
+                p2pClient.disconnect();
+                p2pClient = null;
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            // Generate initial room ID
+            generateRandomId();
+            
+            // Set initial button states
+            document.getElementById('joinBtn').disabled = true;
+            document.getElementById('offerBtn').disabled = true;
+            document.getElementById('sendChatBtn').disabled = true;
+            document.getElementById('sendFileBtn').disabled = true;
+            document.getElementById('disconnectBtn').disabled = true;
+        });
+    </script>
+</body>
+</html>

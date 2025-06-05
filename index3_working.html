@@ -52,17 +52,21 @@
             cursor: not-allowed;
             transform: none;
         }
-        /* Fix for send button - override disabled styles when actually functional */
-        button.force-enabled {
-            background: #28a745 !important;
-            cursor: pointer !important;
-            transform: none !important;
-            opacity: 1 !important;
-        }
-        button.force-enabled:hover {
-            background: #218838 !important;
-            transform: translateY(-1px) !important;
-        }
+/* Add this new class for enabled state that overrides disabled styling */
+button.force-enabled {
+    background: #28a745 !important;
+    cursor: pointer !important;
+    transform: scale(1.02) !important;
+    opacity: 1 !important;
+}
+
+/* Or alternatively, be more specific with the send button */
+#sendBtn:not(.actually-disabled) {
+    background: #28a745 !important;
+    cursor: pointer !important;
+    transform: scale(1.02) !important;
+}
+
         .log {
             background: #1a1a1a;
             color: #00ff00;
@@ -128,11 +132,6 @@
             background: #fff3cd;
             color: #856404;
             border: 2px solid #ffeaa7;
-        }
-        .status.websocket-disconnected {
-            background: #cce5ff;
-            color: #0066cc;
-            border: 2px solid #99ccff;
         }
         input[type="text"] {
             width: 350px;
@@ -239,7 +238,7 @@
             <button onclick="connectToTracker()" id="connectBtn">Connect to Tracker</button>
             <button onclick="joinRoom()" id="joinBtn" disabled>Join Room</button>
             <button onclick="createOffer()" id="offerBtn" disabled>Create WebRTC Offer</button>
-            <button onclick="sendMessage()" id="sendBtn" disabled>Send Test Message</button>
+            <button onclick="sendMessage()" id="sendBtn">Send Test Message</button>
             <button onclick="disconnect()" id="disconnectBtn" disabled>Disconnect</button>
             <button onclick="disconnectWebSocket()" id="disconnectWSBtn" disabled>Disconnect WebSocket Only</button>
             <button onclick="checkConnections()" id="checkConnectionsBtn">Check Connections</button>
@@ -276,6 +275,7 @@
     </div>
 
     <script>
+        // WebRTC Signaling via BitTorrent Tracker Implementation
         class WebRTCTrackerSignaling {
             constructor(trackerUrl) {
                 this.trackerUrl = trackerUrl;
@@ -290,6 +290,8 @@
                 this.onPeerDisconnected = null;
                 this.onMessageReceived = null;
                 this.onStatusChanged = null;
+                
+                // Store pending ICE candidates for each connection
                 this.pendingIceCandidates = new Map();
             }
 
@@ -304,7 +306,7 @@
             }
 
             stringToBuffer(str) {
-                return str;
+                return str; // The tracker expects the raw string, not converted
             }
 
             log(message) {
@@ -350,6 +352,7 @@
 
                     this.socket.onmessage = (event) => {
                         try {
+                
                             const message = JSON.parse(event.data);
                             this.logJson('RECEIVED', message);
                             this.handleTrackerMessage(message);
@@ -423,6 +426,19 @@
                 }, interval);
             }
 
+            checkP2PConnections() {
+                let connectedCount = 0;
+                this.peerConnections.forEach((pc, peerId) => {
+                    if (pc.connectionState === 'connected') {
+                        connectedCount++;
+                        this.log(`✅ P2P Connected to: ${peerId}`);
+                    }
+                });
+                
+                this.log(`📊 Total P2P connections: ${connectedCount}`);
+                return connectedCount;
+            }
+
             async createAndSendOffer() {
                 this.log('🚀 Creating WebRTC offer');
 
@@ -439,24 +455,18 @@
 
                 const offerId = this.generateSimplePeerId().substring(0, 10);
                 
+                // Store the peer connection with offer ID
                 this.peerConnections.set(String(offerId), peerConnection);
                 this.dataChannels.set(String(offerId), dataChannel);
 
                 dataChannel.onopen = () => {
                     this.log('📡 Data channel opened (offer side)');
-                    this.connectedPeers.add(offerId);
-                    updateSendButtonState();
+                    document.getElementById('sendBtn').disabled = false;
                 };
 
                 dataChannel.onmessage = (event) => {
                     this.log('📨 Received: ' + event.data);
                     this.onMessageReceived?.(event.data);
-                };
-
-                dataChannel.onclose = () => {
-                    this.log('📡 Data channel closed (offer side)');
-                    this.connectedPeers.delete(offerId);
-                    updateSendButtonState();
                 };
 
                 peerConnection.onconnectionstatechange = () => {
@@ -466,13 +476,28 @@
                     }
                 };
 
+                peerConnection.oniceconnectionstatechange = () => {
+                    this.log(`🧊 ICE connection state: ${peerConnection.iceConnectionState}`);
+                };
+
+                peerConnection.onicegatheringstatechange = () => {
+                    this.log(`🧊 ICE gathering state: ${peerConnection.iceGatheringState}`);
+                };
+
+    
+
                 try {
                     const offer = await peerConnection.createOffer();
                     await peerConnection.setLocalDescription(offer);
+
                     await this.waitForIceGatheringComplete(peerConnection, 10000);
 
+
                     this.log('📤 Sending offer with ID: ' + offerId);
+                    this.log('🧾 ICE candidates are now embedded in SDP');
                     
+
+                    // Send offer through tracker
                     const offerMessage = {
                         action: 'announce',
                         info_hash: this.stringToBuffer(this.infoHash),
@@ -498,9 +523,9 @@
                     this.log('❌ Error creating offer: ' + error);
                 }
             }
-
             waitForIceGatheringComplete(peerConnection, timeoutMs = 10000) {
                 return new Promise((resolve) => {
+                    // If already complete, resolve immediately
                     if (peerConnection.iceGatheringState === 'complete') {
                         this.log('🧾 ICE gathering already complete');
                         resolve();
@@ -509,34 +534,77 @@
 
                     let isResolved = false;
                     let candidateCount = 0;
+                    let lastCandidateTime = Date.now();
 
                     const resolveOnce = (reason) => {
                         if (!isResolved) {
                             isResolved = true;
                             this.log(`🧾 ICE gathering finished: ${reason}`);
+                            peerConnection.removeEventListener('icegatheringstatechange', checkState);
+                            peerConnection.removeEventListener('icecandidate', candidateHandler);
+                            clearTimeout(timeoutHandle);
+                            clearTimeout(candidateTimeoutHandle);
                             resolve();
+                        }
+                    };
+
+                    const checkState = () => {
+                        if (peerConnection.iceGatheringState === 'complete') {
+                            resolveOnce(`Complete state reached with ${candidateCount} candidates`);
+                        } else {
+                            this.log(`🧊 ICE gathering state: ${peerConnection.iceGatheringState}`);
                         }
                     };
 
                     const candidateHandler = (event) => {
                         if (event.candidate) {
                             candidateCount++;
-                            this.log(`🧾 Collected ICE candidate #${candidateCount}`);
+                            lastCandidateTime = Date.now();
+                            this.log(`🧾 Collected ICE candidate #${candidateCount}: ${event.candidate.candidate.substring(0, 50)}...`);
                         } else {
+                            // null candidate indicates end of candidates
                             this.log('🧾 Received end-of-candidates signal');
                             resolveOnce(`End-of-candidates signal received with ${candidateCount} candidates`);
                         }
                     };
 
+                    // Listen for state changes and candidates
+                    peerConnection.addEventListener('icegatheringstatechange', checkState);
                     peerConnection.addEventListener('icecandidate', candidateHandler);
 
-                    setTimeout(() => {
+                    // Main timeout - absolute maximum wait time
+                    const timeoutHandle = setTimeout(() => {
                         if (candidateCount > 0) {
-                            resolveOnce(`Timeout with ${candidateCount} candidates`);
+                            this.log(`⏰ ICE gathering timeout after ${timeoutMs}ms, but we have ${candidateCount} candidates - proceeding`);
+                            resolveOnce(`Timeout with ${candidateCount} candidates (acceptable)`);
                         } else {
-                            resolveOnce(`Timeout with no candidates`);
+                            this.log(`⏰ ICE gathering timeout after ${timeoutMs}ms with no candidates - proceeding anyway`);
+                            resolveOnce(`Timeout with no candidates (may cause connection issues)`);
                         }
                     }, timeoutMs);
+
+                    // Candidate inactivity timeout - if no new candidates for 3 seconds after getting some
+                    let candidateTimeoutHandle;
+                    const checkCandidateTimeout = () => {
+                        candidateTimeoutHandle = setTimeout(() => {
+                            if (candidateCount > 0 && (Date.now() - lastCandidateTime) > 3000) {
+                                this.log(`🧾 No new candidates for 3s, assuming gathering complete with ${candidateCount} candidates`);
+                                resolveOnce(`Candidate inactivity timeout with ${candidateCount} candidates`);
+                            } else if (candidateCount > 0) {
+                                // Keep checking if we have candidates but they're still coming
+                                checkCandidateTimeout();
+                            }
+                        }, 3000);
+                    };
+
+                    // Start the candidate timeout check after a short delay
+                    setTimeout(() => {
+                        if (candidateCount > 0 && !isResolved) {
+                            checkCandidateTimeout();
+                        }
+                    }, 1000);
+
+                    this.log(`🧊 Waiting for ICE gathering (timeout: ${timeoutMs}ms)...`);
                 });
             }
 
@@ -552,6 +620,7 @@
 
                 const offerId = message.offer_id;
                 
+                // Store peer connection with both offer_id and peer_id
                 this.peerConnections.set(String(offerId), peerConnection);
                 this.peerConnections.set(String(message.peer_id), peerConnection);
 
@@ -562,6 +631,13 @@
                     }
                 };
 
+                peerConnection.oniceconnectionstatechange = () => {
+                    this.log(`🧊 ICE connection state with ${message.peer_id}: ${peerConnection.iceConnectionState}`);
+                };
+
+    
+
+                // Handle incoming data channel
                 peerConnection.ondatachannel = (event) => {
                     const dataChannel = event.channel;
                     this.dataChannels.set(message.peer_id, dataChannel);
@@ -570,7 +646,7 @@
                         this.log('📡 Data channel opened with: ' + message.peer_id);
                         this.connectedPeers.add(message.peer_id);
                         this.onPeerConnected?.(message.peer_id);
-                        updateSendButtonState();
+                        document.getElementById('sendBtn').disabled = false;
                     };
 
                     dataChannel.onmessage = (event) => {
@@ -582,7 +658,6 @@
                         this.log('📡 Data channel closed with: ' + message.peer_id);
                         this.connectedPeers.delete(message.peer_id);
                         this.onPeerDisconnected?.(message.peer_id);
-                        updateSendButtonState();
                     };
                 };
 
@@ -591,12 +666,15 @@
                     
                     await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData));
                     this.log('✅ Remote offer description set');
+                    updateStatus('connected');
 
                     const answer = await peerConnection.createAnswer();
                     await peerConnection.setLocalDescription(answer);
                     await this.waitForIceGatheringComplete(peerConnection, 10000);
                     this.log('✅ Local answer description set');
+                    this.log('🧾 Answer ICE candidates are now embedded in SDP');
 
+                    // Send answer through tracker
                     const answerMessage = {
                         action: 'announce',
                         info_hash: this.stringToBuffer(this.infoHash),
@@ -624,6 +702,7 @@
                 }
             }
 
+
             async handleAnswer(message) {
                 this.log('📥 Received answer from: ' + message.peer_id);
                 
@@ -639,12 +718,20 @@
                         return;
                     }
 
+                    // Set the remote description (answer) which contains all ICE candidates
                     await peerConnection.setRemoteDescription(new RTCSessionDescription(message.answer));
                     this.log('✅ Remote answer description set for: ' + message.peer_id);
 
+                    // Store connection by peer_id for easier lookup
                     this.peerConnections.set(String(message.peer_id), peerConnection);
                     
                     this.log('🎯 WebRTC handshake completed with: ' + message.peer_id);
+                    this.log('⏳ Waiting for P2P connection to establish...');
+
+                    updateStatus('connected');
+                    
+                    // The connection should now establish automatically since both sides have complete SDP
+                    // The data channel will open via the existing onopen handler in createAndSendOffer()
                     
                 } catch (error) {
                     this.log('❌ Error handling answer: ' + error);
@@ -670,9 +757,12 @@
                     }
                 }
 
+                // Handle WebRTC signaling messages
                 if (message.offer) {
+                    console.log('------------******');
                     this.handleOffer(message);
                 } else if (message.answer) {
+                    console.log('------------******000000000000000');
                     this.handleAnswer(message);
                 } 
             }
@@ -693,66 +783,28 @@
                 }
             }
 
-            // FIXED: sendMessageToAll now works without WebSocket dependency
             sendMessageToAll(message) {
                 let sent = 0;
                 this.dataChannels.forEach((channel, peerId) => {
                     if (channel.readyState === 'open') {
-                        try {
-                            channel.send(message);
-                            sent++;
-                            this.log(`📤 Sent to ${peerId}: ${message}`);
-                        } catch (error) {
-                            this.log(`❌ Failed to send to ${peerId}: ${error}`);
-                        }
+                        channel.send(message);
+                        sent++;
                     }
                 });
-                this.log(`📤 Total messages sent: ${sent}`);
+                this.log(`📤 Sent message to ${sent} peers: ${message}`);
                 return sent;
-            }
-
-            disconnectWebSocket() {
-                if (!this.socket) {
-                    this.log('❌ No WebSocket connection to disconnect');
-                    return;
-                }
-                
-                this.log('🔌 Disconnecting WebSocket only - keeping P2P connections');
-                
-                if (this.announceInterval) {
-                    clearInterval(this.announceInterval);
-                    this.announceInterval = null;
-                    this.log('⏹️ Stopped periodic announcements');
-                }
-                
-                if (this.socket.readyState === WebSocket.OPEN && this.infoHash) {
-                    const stopMessage = {
-                        action: 'announce',
-                        info_hash: this.stringToBuffer(this.infoHash),
-                        peer_id: this.stringToBuffer(this.peerId),
-                        port: 6881,
-                        event: 'stopped',
-                        numwant: 0
-                    };
-                    this.sendMessage(stopMessage);
-                    this.log('📤 Sent stop event to tracker');
-                }
-                
-                this.socket.close();
-                this.socket = null;
-                
-                this.log('✅ WebSocket disconnected successfully');
-                this.log(`📊 P2P connections still active: ${this.connectedPeers.size}`);
             }
 
             disconnect() {
                 this.log('🔌 Disconnecting...');
                 
+                // Clear periodic announce
                 if (this.announceInterval) {
                     clearInterval(this.announceInterval);
                     this.announceInterval = null;
                 }
                 
+                // Close all peer connections
                 this.peerConnections.forEach((pc) => {
                     pc.close();
                 });
@@ -760,12 +812,16 @@
                 this.dataChannels.clear();
                 this.connectedPeers.clear();
 
+                // Send stopped event
                 if (this.socket && this.socket.readyState === WebSocket.OPEN && this.infoHash) {
                     const stopMessage = {
                         action: 'announce',
                         info_hash: this.stringToBuffer(this.infoHash),
                         peer_id: this.stringToBuffer(this.peerId),
                         port: 6881,
+                        uploaded: 0,
+                        downloaded: 0,
+                        left: 0,
                         event: 'stopped',
                         numwant: 0
                     };
@@ -777,15 +833,67 @@
                     this.socket = null;
                 }
             }
+        
+        
+            disconnectWebSocket() {
+    if (!this.socket) {
+        console.log('❌ No WebSocket connection to disconnect');
+        return;
+    }
+    
+    console.log('🔌 Disconnecting WebSocket only - keeping P2P connections');
+    
+    // Clear the announce interval to stop periodic announcements
+    if (this.announceInterval) {
+        clearInterval(this.announceInterval);
+        this.announceInterval = null;
+        console.log('⏹️ Stopped periodic announcements');
+    }
+    
+    // Send stopped event before closing (optional - for clean disconnect)
+    if (this.socket.readyState === WebSocket.OPEN && this.infoHash) {
+        const stopMessage = {
+            action: 'announce',
+            info_hash: this.stringToBuffer(this.infoHash),
+            peer_id: this.stringToBuffer(this.peerId),
+            port: 6881,
+            uploaded: 0,
+            downloaded: 0,
+            left: 0,
+            event: 'stopped',
+            numwant: 0
+        };
+        this.sendMessage(stopMessage);
+        console.log('📤 Sent stop event to tracker');
+    }
+    
+    // Close only the WebSocket connection
+    this.socket.close();
+    this.socket = null;
+    
+    console.log('✅ WebSocket disconnected successfully');
+    console.log(`📊 P2P connections still active: ${this.connectedPeers.size}`);
+    
+    // Log current P2P connection states
+    this.connectedPeers.forEach(peerId => {
+        const peerConnection = this.peerConnections.get(String(peerId));
+        const dataChannel = this.dataChannels.get(String(peerId));
+        console.log(`🔗 Peer ${peerId}: PC=${peerConnection?.connectionState}, DC=${dataChannel?.readyState}`);
+    });
+}
+
         }
 
+        // Global instance
         let signaling = null;
 
+        // UI Functions
         function updateStatus(status) {
             const statusEl = document.getElementById('status');
             const connectBtn = document.getElementById('connectBtn');
             const joinBtn = document.getElementById('joinBtn');
             const offerBtn = document.getElementById('offerBtn');
+            const sendBtn = document.getElementById('sendBtn');
             const disconnectBtn = document.getElementById('disconnectBtn');
             const disconnectWSBtn = document.getElementById('disconnectWSBtn');
 
@@ -799,15 +907,19 @@
                     offerBtn.disabled = false;
                     disconnectBtn.disabled = false;
                     disconnectWSBtn.disabled = false;
+                    // sendBtn state depends on P2P connections
+                    updateSendButtonStateByDataChannels();
                     break;
                     
                 case 'websocket-disconnected':
                     statusEl.textContent = '🔌 WebSocket Disconnected (P2P Active)';
                     connectBtn.disabled = false;
                     joinBtn.disabled = true;
-                    offerBtn.disabled = true;
+                    offerBtn.disabled = true; // Can't create new offers without signaling
                     disconnectBtn.disabled = false;
                     disconnectWSBtn.disabled = true;
+                    // sendBtn state depends on P2P connections
+                    updateSendButtonStateByDataChannels();
                     break;
                     
                 case 'disconnected':
@@ -815,117 +927,119 @@
                     connectBtn.disabled = false;
                     joinBtn.disabled = true;
                     offerBtn.disabled = true;
+                    sendBtn.disabled = true;
                     disconnectBtn.disabled = true;
                     disconnectWSBtn.disabled = true;
                     break;
                     
                 case 'connecting':
-                    statusEl.textContent = '⏳ Connecting...';
+                    statusEl.textContent = '🔄 Connecting...';
                     connectBtn.disabled = true;
-                    joinBtn.disabled = true;
-                    offerBtn.disabled = true;
-                    disconnectBtn.disabled = false;
                     disconnectWSBtn.disabled = true;
                     break;
             }
-            
-            // Always check P2P connections after status update
-            updateSendButtonState();
         }
-
-        // FIXED: Properly enables send button for P2P connections
-        function updateSendButtonState() {
-            const sendBtn = document.getElementById('sendBtn');
-            if (!sendBtn || !signaling) return;
-            
-            const openChannels = Array.from(signaling.dataChannels.values())
-                .filter(channel => channel.readyState === 'open');
-            
-            if (openChannels.length > 0) {
-                // Enable for P2P - remove disabled attribute completely
-                sendBtn.disabled = false;
-                sendBtn.className = 'p2p-enabled';
-                sendBtn.textContent = `Send to ${openChannels.length} peer(s)`;
-                sendBtn.style.pointerEvents = 'auto';
-                sendBtn.style.cursor = 'pointer';
-            } else {
-                sendBtn.disabled = true;
-                sendBtn.className = '';
-                sendBtn.textContent = 'Send Test Message';
-                sendBtn.style.pointerEvents = '';
-                sendBtn.style.cursor = '';
-            }
+        function generateNewRoom() {
+            const signaling = new WebRTCTrackerSignaling('');
+            const newHash = signaling.generateSimpleInfoHash();
+            document.getElementById('infoHash').value = newHash;
         }
 
         async function connectToTracker() {
             const trackerUrl = document.getElementById('trackerUrl').value;
-            
-            if (signaling) {
-                signaling.disconnect();
-            }
+            updateStatus('connecting');
             
             signaling = new WebRTCTrackerSignaling(trackerUrl);
+            
+            // Set up event handlers
             signaling.onStatusChanged = updateStatus;
+            signaling.onPeerConnected = (peerId) => {
+                signaling.log('🎉 Peer connected: ' + peerId);
+                document.getElementById('sendBtn').disabled = false;
+            };
+            signaling.onMessageReceived = (message, fromPeer) => {
+                signaling.log('💬 Message: ' + message + (fromPeer ? ' from ' + fromPeer : ''));
+            };
             
+            // Display peer ID
             document.getElementById('peerIdDisplay').textContent = signaling.peerId;
-            
-            updateStatus('connecting');
             
             try {
                 await signaling.connect();
-                updateStatus('connected');
             } catch (error) {
-                console.error('Connection failed:', error);
                 updateStatus('disconnected');
+                alert('Failed to connect: ' + error);
             }
         }
 
         function joinRoom() {
-            if (!signaling) return;
-            
             const infoHash = document.getElementById('infoHash').value;
-            if (infoHash.length !== 20) {
-                alert('Info Hash must be exactly 20 characters');
+            if (!infoHash || infoHash.length !== 20) {
+                alert('Please enter a valid 20-digit info hash');
                 return;
             }
-            
             signaling.announceToSwarm(infoHash);
         }
 
         function createOffer() {
-            if (!signaling) return;
-            signaling.createAndSendOffer();
+            if (signaling) {
+                signaling.createAndSendOffer();
+            }
         }
 
-        // FIXED: Works with P2P data channels when WebSocket is disconnected
         function sendMessage() {
-            if (!signaling) {
-                console.log('❌ No signaling instance');
-                return;
-            }
-            
             const message = document.getElementById('testMessage').value;
-            if (!message.trim()) {
-                alert('Please enter a message to send');
-                return;
-            }
-            
-            // Check if we have open data channels for P2P
-            const openChannels = Array.from(signaling.dataChannels.values())
-                .filter(channel => channel.readyState === 'open');
-                
-            if (openChannels.length > 0) {
+            if (signaling && message) {
                 const sent = signaling.sendMessageToAll(message);
-                if (sent > 0) {
-                    signaling.log(`✅ Message sent via P2P to ${sent} peer(s): ${message}`);
-                } else {
-                    signaling.log('❌ Failed to send message via P2P');
+                if (sent === 0) {
+                    alert('No connected peers to send message to');
                 }
-            } else {
-                signaling.log('❌ No open P2P connections available');
-                alert('No P2P connections available. Try creating an offer first.');
             }
         }
+
+function checkConnections() {
+    if (!signaling) {
+        alert('Not connected to signaling service');
+        return;
+    }
+    
+    console.log('🔍 Checking P2P connections...');
+    
+    // Log peer connections status
+    console.log(`📊 Total peer connections: ${signaling.peerConnections.size}`);
+    console.log(`📊 Active data channels: ${signaling.dataChannels.size}`);
+    console.log(`📊 Connected peers: ${signaling.connectedPeers.size}`);
+    
+    // Check each peer connection
+    signaling.peerConnections.forEach((peerConnection, peerId) => {
+        console.log(`🔗 Peer ${peerId}:`);
+        console.log(`  - Connection State: ${peerConnection.connectionState}`);
+        console.log(`  - ICE Connection State: ${peerConnection.iceConnectionState}`);
+        console.log(`  - ICE Gathering State: ${peerConnection.iceGatheringState}`);
+        console.log(`  - Signaling State: ${peerConnection.signalingState}`);
+    });
+    
+    // Check data channels
+    signaling.dataChannels.forEach((dataChannel, peerId) => {
+        console.log(`📡 Data Channel ${peerId}:`);
+        console.log(`  - Ready State: ${dataChannel.readyState}`);
+        console.log(`  - Label: ${dataChannel.label}`);
+    });
+    
+    // Display summary in alert
+    const summary = `
+Peer Connections: ${signaling.peerConnections.size}
+Active Data Channels: ${signaling.dataChannels.size}
+Connected Peers: ${signaling.connectedPeers.size}
+
+Connected Peer IDs: ${Array.from(signaling.connectedPeers).join(', ') || 'None'}
+
+Check console for detailed connection states.
+    `;
+    
+    alert(summary.trim());
+}
+
 
         function disconnect() {
             if (signaling) {
@@ -933,53 +1047,68 @@
                 signaling = null;
             }
             updateStatus('disconnected');
-            updateSendButtonState();
         }
 
         function disconnectWebSocket() {
-            if (signaling) {
-                signaling.disconnectWebSocket();
-                updateStatus('websocket-disconnected');
-                updateSendButtonState();
-            }
-        }
+    if (signaling) {
+        signaling.disconnectWebSocket();
+        updateStatus('websocket-disconnected');
+    } else {
+        alert('No signaling connection available');
+    }
+}
 
-        function checkConnections() {
-            if (!signaling) {
-                console.log('❌ No signaling instance');
-                return;
-            }
-            
-            signaling.log('=== Connection Status Check ===');
-            signaling.log(`WebSocket: ${signaling.socket ? 'Connected' : 'Disconnected'}`);
-            signaling.log(`P2P Connections: ${signaling.peerConnections.size}`);
-            signaling.log(`Data Channels: ${signaling.dataChannels.size}`);
-            signaling.log(`Connected Peers: ${signaling.connectedPeers.size}`);
-            
-            const openChannels = Array.from(signaling.dataChannels.values())
-                .filter(channel => channel.readyState === 'open');
-            signaling.log(`Open Data Channels: ${openChannels.length}`);
-            
-            signaling.dataChannels.forEach((channel, peerId) => {
-                signaling.log(`Peer ${peerId}: ${channel.readyState}`);
-            });
-            
-            updateSendButtonState();
-        }
+        // Initialize UI
+        updateStatus('disconnected');
+        generateNewRoom();
 
-        function generateNewRoom() {
-            if (!signaling) {
-                signaling = new WebRTCTrackerSignaling('');
-            }
-            const newHash = signaling.generateSimpleInfoHash();
-            document.getElementById('infoHash').value = newHash;
+        function updateSendButtonState() {
+    const sendBtn = document.getElementById('sendBtn');
+    
+    if (signaling > 0) {
+        sendBtn.disabled = false;
+        sendBtn.textContent = `Send to ${signaling.connectedPeers.size} peer(s)`;
+        sendBtn.style.backgroundColor = '#28a745';
+    } else {
+        sendBtn.disabled = true;
+        sendBtn.textContent = 'Send Test Message';
+        sendBtn.style.backgroundColor = '';
+    }
+}
+function updateSendButtonStateByDataChannels() {
+    const sendBtn = document.getElementById('sendBtn');
+    
+    if (!signaling) {
+        sendBtn.disabled = true;
+        sendBtn.classList.remove('force-enabled');
+        sendBtn.textContent = 'Send Test Message';
+        return;
+    }
+    
+    // Count open data channels
+    let openChannels = 0;
+    signaling.dataChannels.forEach((dc) => {
+        if (dc.readyState === 'open') {
+            openChannels++;
         }
-
-        // Initialize on page load
-        window.addEventListener('load', () => {
-            updateStatus('disconnected');
-            generateNewRoom();
-        });
+    });
+    
+    console.log(`📊 Open data channels: ${openChannels}`);
+    
+    if (openChannels > 0) {
+        // ACTUALLY enable the button AND add CSS class to override disabled styles
+        sendBtn.disabled = false;
+        sendBtn.classList.add('force-enabled');
+        sendBtn.textContent = `Send to ${openChannels} peer(s)`;
+        console.log('✅ Button enabled with CSS override');
+    } else {
+        sendBtn.disabled = true;
+        sendBtn.classList.remove('force-enabled');
+        sendBtn.textContent = 'Send Test Message';
+        console.log('❌ Button disabled');
+    }
+}
 
     </script>
 </body>
+</html>

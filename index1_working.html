@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC BitTorrent Tracker Signaling Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f0f0f0;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .log {
+            background: #000;
+            color: #0f0;
+            padding: 10px;
+            border-radius: 5px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .status.connecting {
+            background: #fff3cd;
+            color: #856404;
+        }
+        input[type="text"] {
+            width: 300px;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 5px;
+        }
+        select {
+            width: 320px;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 5px;
+        }
+        .peer-info {
+            background: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 5px 0;
+        }
+        .json-log {
+            background: #001122;
+            color: #00ff88;
+            padding: 10px;
+            border-radius: 5px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 11px;
+            white-space: pre-wrap;
+            border: 1px solid #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔥 WebRTC BitTorrent Tracker Signaling Demo</h1>
+        <p>This demo shows how to use BitTorrent trackers for WebRTC peer discovery and signaling.</p>
+        
+        <div class="status" id="status">Disconnected</div>
+        
+        <div>
+            <label>Tracker URL:</label>
+            <select id="trackerUrl">
+                <option value="wss://tracker.openwebtorrent.com">wss://tracker.openwebtorrent.com</option>
+                <option value="wss://tracker.files.fm:7073">wss://tracker.files.fm:7073</option>
+                <option value="wss://tracker.webtorrent.dev">wss://tracker.webtorrent.dev</option>
+            </select>
+        </div>
+        
+        <div>
+            <label>Info Hash (room):</label>
+            <input type="text" id="infoHash" value="01234567890123456789" maxlength="20" />
+            <button onclick="generateNewRoom()">Generate New Room</button>
+        </div>
+        
+        <div class="peer-info">
+            <strong>Your Peer ID:</strong> <span id="peerIdDisplay"></span>
+        </div>
+        
+        <div>
+            <button onclick="connectToTracker()" id="connectBtn">Connect to Tracker</button>
+            <button onclick="joinRoom()" id="joinBtn" disabled>Join Room</button>
+            <button onclick="createOffer()" id="offerBtn" disabled>Create WebRTC Offer</button>
+            <button onclick="sendMessage()" id="sendBtn" disabled>Send Test Message</button>
+            <button onclick="disconnect()" id="disconnectBtn" disabled>Disconnect</button>
+        </div>
+        
+        <div>
+            <label>Test Message:</label>
+            <input type="text" id="testMessage" value="Hello from WebRTC!" />
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>📊 Peers in Room</h3>
+        <div id="peersList">No peers found</div>
+    </div>
+
+    <div class="container">
+        <h3>📤 Outgoing Messages (JSON)</h3>
+        <div class="json-log" id="jsonOutput"></div>
+    </div>
+
+    <div class="container">
+        <h3>📝 Log</h3>
+        <div class="log" id="logOutput"></div>
+    </div>
+
+    <script>
+        // WebRTC Signaling via BitTorrent Tracker Implementation
+        class WebRTCTrackerSignaling {
+            constructor(trackerUrl) {
+                this.trackerUrl = trackerUrl;
+                this.socket = null;
+                this.peerId = this.generateSimplePeerId();
+                this.infoHash = null;
+                this.peerConnections = new Map();
+                this.dataChannels = new Map();
+                this.connectedPeers = new Set();
+                this.announceInterval = null;
+                this.onPeerConnected = null;
+                this.onPeerDisconnected = null;
+                this.onMessageReceived = null;
+                this.onStatusChanged = null;
+            }
+
+            generateSimplePeerId() {
+                // Generate simple 20-digit peer ID
+                const digits = '0123456789';
+                return Array.from({ length: 20 }, () => digits[Math.floor(Math.random() * digits.length)]).join('');
+            }
+
+            generateSimpleInfoHash() {
+                // Generate simple 20-digit info hash
+                const digits = '0123456789';
+                return Array.from({ length: 20 }, () => digits[Math.floor(Math.random() * digits.length)]).join('');
+            }
+
+            stringToBuffer(str) {
+                // Convert string to binary buffer for BitTorrent protocol
+                const bytes = [];
+                for (let i = 0; i < str.length; i++) {
+                    // For simple digit strings, just use the character code
+                    bytes.push(str.charCodeAt(i));
+                }
+                return String.fromCharCode.apply(null, bytes);
+            }
+
+            log(message) {
+                console.log(message);
+                const logElement = document.getElementById('logOutput');
+                if (logElement) {
+                    logElement.innerHTML += new Date().toLocaleTimeString() + ': ' + message + '\n';
+                    logElement.scrollTop = logElement.scrollHeight;
+                }
+            }
+
+            logJson(direction, message) {
+                const jsonElement = document.getElementById('jsonOutput');
+                if (jsonElement) {
+                    const timestamp = new Date().toLocaleTimeString();
+                    const formatted = JSON.stringify(message, null, 2);
+                    jsonElement.innerHTML += `\n[${timestamp}] ${direction}:\n${formatted}\n${'='.repeat(50)}\n`;
+                    jsonElement.scrollTop = jsonElement.scrollHeight;
+                }
+            }
+
+            async connect() {
+                return new Promise((resolve, reject) => {
+                    this.log('Connecting to tracker: ' + this.trackerUrl);
+                    this.socket = new WebSocket(this.trackerUrl);
+                    
+                    this.socket.onopen = () => {
+                        this.log('✅ Connected to tracker');
+                        this.onStatusChanged?.('connected');
+                        resolve();
+                    };
+
+                    this.socket.onerror = (error) => {
+                        this.log('❌ WebSocket error: ' + error);
+                        reject(error);
+                    };
+
+                    this.socket.onmessage = (event) => {
+                        try {
+                            const message = JSON.parse(event.data);
+                            this.logJson('RECEIVED', message);
+                            this.handleTrackerMessage(message);
+                        } catch (e) {
+                            this.log('❌ Failed to parse message: ' + event.data);
+                        }
+                    };
+
+                    this.socket.onclose = (event) => {
+                        this.log('🔌 Disconnected from tracker. Code: ' + event.code + ', Reason: ' + event.reason);
+                        this.onStatusChanged?.('disconnected');
+                        if (this.announceInterval) {
+                            clearInterval(this.announceInterval);
+                            this.announceInterval = null;
+                        }
+                    };
+                });
+            }
+
+            sendMessage(message) {
+                if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+                    this.logJson('SENDING', message);
+                    this.socket.send(JSON.stringify(message));
+                } else {
+                    this.log('❌ Cannot send message - socket not connected');
+                }
+            }
+
+            announceToSwarm(infoHash) {
+                this.infoHash = infoHash;
+                
+                const announceMessage = {
+                    action: 'announce',
+                    info_hash: this.stringToBuffer(infoHash),
+                    peer_id: this.stringToBuffer(this.peerId),
+                    port: 6881,
+                    uploaded: 0,
+                    downloaded: 0,
+                    left: 0,
+                    event: 'started',
+                    numwant: 50,
+                    compact: 0
+                };
+
+                this.log('📢 Announcing to swarm: ' + infoHash);
+                this.sendMessage(announceMessage);
+            }
+
+            // Start periodic announces to keep connection alive
+            startPeriodicAnnounce(interval = 120000) { // 2 minutes default
+                if (this.announceInterval) {
+                    clearInterval(this.announceInterval);
+                }
+                
+                this.announceInterval = setInterval(() => {
+                    if (this.socket && this.socket.readyState === WebSocket.OPEN && this.infoHash) {
+                        const announceMessage = {
+                            action: 'announce',
+                            info_hash: this.stringToBuffer(this.infoHash),
+                            peer_id: this.stringToBuffer(this.peerId),
+                            port: 6881,
+                            uploaded: 0,
+                            downloaded: 0,
+                            left: 0,
+                            event: 'update',
+                            numwant: 50,
+                            compact: 0
+                        };
+                        this.sendMessage(announceMessage);
+                        this.log('🔄 Periodic announce sent');
+                    }
+                }, interval);
+            }
+
+            async createAndSendOffer() {
+                this.log('🚀 Creating WebRTC offer');
+
+                const peerConnection = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' }
+                    ]
+                });
+
+                const dataChannel = peerConnection.createDataChannel('chat', {
+                    ordered: true
+                });
+
+                dataChannel.onopen = () => {
+                    this.log('📡 Data channel opened');
+                };
+
+                dataChannel.onmessage = (event) => {
+                    this.log('📨 Received: ' + event.data);
+                    this.onMessageReceived?.(event.data);
+                };
+
+                dataChannel.onclose = () => {
+                    this.log('📡 Data channel closed');
+                };
+
+                try {
+                    const offer = await peerConnection.createOffer();
+                    await peerConnection.setLocalDescription(offer);
+
+                    const offerId = this.generateSimplePeerId().substring(0, 10);
+                    
+                    // Store the peer connection
+                    this.peerConnections.set(offerId, peerConnection);
+                    this.dataChannels.set(offerId, dataChannel);
+                    
+                    this.log('📤 Sending offer with ID: ' + offerId);
+
+                      peerConnection.onicecandidate = (event) => {
+                        if (event.candidate) {
+                            this.log(`🧾 Sending ICE candidate for offer ${offerId}`);
+                            const candidateMessage = {
+                                action: "announce",
+                                info_hash: this.stringToBuffer(this.infoHash),
+                                peer_id: this.stringToBuffer(this.peerId),
+                                to_peer_id: "", // Optional: target peer ID
+                                ice_candidate: event.candidate,
+                                offer_id: offerId,
+                                port: 6881,
+                                uploaded: 0,
+                                downloaded: 0,
+                                left: 0,
+                                event: "update",
+                                numwant: 0
+                            };
+
+                            console.log("--->>", JSON.stringify(candidateMessage));
+                            this.sendMessage(candidateMessage);
+                        }
+                    };
+
+
+                    // Send offer as a separate announce with offers array
+                    const offerMessage = {
+                        action: 'announce',
+                        info_hash: this.stringToBuffer(this.infoHash),
+                        peer_id: this.stringToBuffer(this.peerId),
+                        port: 6881,
+                        uploaded: 0,
+                        downloaded: 0,
+                        left: 0,
+                        event: 'update',
+                        numwant: 0,
+                        compact: 0,
+                        offers: [{
+                            offer: {
+                                type: 'offer',
+                                sdp: offer.sdp
+                            },
+                            offer_id: offerId
+                        }]
+                    };
+
+                    this.sendMessage(offerMessage);
+                } catch (error) {
+                    this.log('❌ Error creating offer: ' + error);
+                }
+            }
+
+            async handleOffer(message) {
+                this.log('📥 Received offer from: ' + message.peer_id);
+                
+                const peerConnection = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' }
+                    ]
+                });
+
+                peerConnection.ondatachannel = (event) => {
+                    const dataChannel = event.channel;
+                    this.dataChannels.set(message.peer_id, dataChannel);
+                    
+                    dataChannel.onopen = () => {
+                        this.log('📡 Data channel opened with: ' + message.peer_id);
+                        this.connectedPeers.add(message.peer_id);
+                        this.onPeerConnected?.(message.peer_id);
+                    };
+
+                    dataChannel.onmessage = (event) => {
+                        this.log('📨 Message from ' + message.peer_id + ': ' + event.data);
+                        this.onMessageReceived?.(event.data, message.peer_id);
+                    };
+
+                    dataChannel.onclose = () => {
+                        this.log('📡 Data channel closed with: ' + message.peer_id);
+                        this.connectedPeers.delete(message.peer_id);
+                        this.onPeerDisconnected?.(message.peer_id);
+                    };
+                };
+
+                try {
+                    await peerConnection.setRemoteDescription(message.offer);
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+
+                    this.peerConnections.set(message.peer_id, peerConnection);
+
+                    const answerMessage = {
+                        action: 'announce',
+                        info_hash: this.stringToBuffer(message.info_hash || this.infoHash),
+                        peer_id: this.stringToBuffer(this.peerId),
+                        to_peer_id: message.peer_id,
+                        answer: {
+                            type: 'answer',
+                            sdp: answer.sdp
+                        },
+                        offer_id: message.offer_id,
+                        event: 'update',
+                        numwant: 0,
+                        port: 6881,
+                        uploaded: 0,
+                        downloaded: 0,
+                        left: 0
+                    };
+
+                    this.log('📤 Sending answer to: ' + message.peer_id);
+                    this.sendMessage(answerMessage);
+                } catch (error) {
+                    this.log('❌ Error handling offer: ' + error);
+                }
+            }
+
+            async handleAnswer(message) {
+                this.log('📥 Received answer from: ' + message.peer_id);
+
+                const peerConnection = this.peerConnections.get(message.offer_id);
+                if (peerConnection) {
+                    try {
+                        await peerConnection.setRemoteDescription(message.answer);
+                        this.log('✅ WebRTC connection established with: ' + message.peer_id);
+                        this.connectedPeers.add(message.peer_id);
+                        this.onPeerConnected?.(message.peer_id);
+                    } catch (error) {
+                        this.log('❌ Error handling answer: ' + error);
+                    }
+                }
+            }
+
+            handleTrackerMessage(message) {
+                this.log('📨 Tracker message type: ' + (message.action || 'unknown'));
+
+                if (message.action === 'announce') {
+                    // Handle announce response
+                    if (message.interval) {
+                        this.log('📊 Tracker interval: ' + message.interval + 's');
+                        // Start periodic announces based on tracker interval
+                        this.startPeriodicAnnounce(message.interval * 1000);
+                    }
+                    
+                    if (message.complete !== undefined || message.incomplete !== undefined) {
+                        this.log('📊 Swarm stats - Seeders: ' + (message.complete || 0) + ', Leechers: ' + (message.incomplete || 0));
+                    }
+                    
+                    if (message.peers && Array.isArray(message.peers)) {
+                        this.log('👥 Found ' + message.peers.length + ' peers in swarm');
+                        this.updatePeersList(message.peers);
+                    }
+                    
+                    if (message.offer) {
+                        this.handleOffer(message);
+                    }
+                    
+                    if (message.answer) {
+                        this.handleAnswer(message);
+                    }
+                } else if (message.offer) {
+                    // Direct offer message
+                    this.handleOffer(message);
+                } else if (message.answer) {
+                    // Direct answer message
+                    this.handleAnswer(message);
+                } else {
+                    this.log('❓ Unknown message: ' + JSON.stringify(message).substring(0, 100) + '...');
+                }
+            }
+
+            updatePeersList(peers) {
+                const peersList = document.getElementById('peersList');
+                if (peersList) {
+                    if (peers.length === 0) {
+                        peersList.innerHTML = 'No other peers found';
+                    } else {
+                        peersList.innerHTML = peers.map(peer => {
+                            const peerIdDisplay = peer.peer_id ? 
+                                (peer.peer_id.length > 8 ? peer.peer_id.substring(0, 8) + '...' : peer.peer_id) 
+                                : 'unknown';
+                            return `<div class="peer-info">Peer: ${peerIdDisplay} (${peer.ip || 'unknown'}:${peer.port || 'unknown'})</div>`;
+                        }).join('');
+                    }
+                }
+            }
+
+            sendMessageToAll(message) {
+                let sent = 0;
+                this.dataChannels.forEach((channel, peerId) => {
+                    if (channel.readyState === 'open') {
+                        channel.send(message);
+                        sent++;
+                    }
+                });
+                this.log(`📤 Sent message to ${sent} peers: ${message}`);
+                return sent;
+            }
+
+            disconnect() {
+                this.log('🔌 Disconnecting...');
+                
+                // Clear periodic announce
+                if (this.announceInterval) {
+                    clearInterval(this.announceInterval);
+                    this.announceInterval = null;
+                }
+                
+                // Close all peer connections
+                this.peerConnections.forEach((pc) => {
+                    pc.close();
+                });
+                this.peerConnections.clear();
+                this.dataChannels.clear();
+                this.connectedPeers.clear();
+
+                // Send stopped event
+                if (this.socket && this.socket.readyState === WebSocket.OPEN && this.infoHash) {
+                    const stopMessage = {
+                        action: 'announce',
+                        info_hash: this.stringToBuffer(this.infoHash),
+                        peer_id: this.stringToBuffer(this.peerId),
+                        port: 6881,
+                        uploaded: 0,
+                        downloaded: 0,
+                        left: 0,
+                        event: 'stopped',
+                        numwant: 0
+                    };
+                    this.sendMessage(stopMessage);
+                }
+
+                if (this.socket) {
+                    this.socket.close();
+                    this.socket = null;
+                }
+            }
+        }
+
+        // Global instance
+        let signaling = null;
+
+        // UI Functions
+        function updateStatus(status) {
+            const statusEl = document.getElementById('status');
+            const connectBtn = document.getElementById('connectBtn');
+            const joinBtn = document.getElementById('joinBtn');
+            const offerBtn = document.getElementById('offerBtn');
+            const sendBtn = document.getElementById('sendBtn');
+            const disconnectBtn = document.getElementById('disconnectBtn');
+
+            statusEl.className = 'status ' + status;
+            
+            switch (status) {
+                case 'connected':
+                    statusEl.textContent = '✅ Connected to Tracker';
+                    connectBtn.disabled = true;
+                    joinBtn.disabled = false;
+                    offerBtn.disabled = false;
+                    disconnectBtn.disabled = false;
+                    break;
+                case 'disconnected':
+                    statusEl.textContent = '❌ Disconnected';
+                    connectBtn.disabled = false;
+                    joinBtn.disabled = true;
+                    offerBtn.disabled = true;
+                    sendBtn.disabled = true;
+                    disconnectBtn.disabled = true;
+                    break;
+                case 'connecting':
+                    statusEl.textContent = '🔄 Connecting...';
+                    connectBtn.disabled = true;
+                    break;
+            }
+        }
+
+        function generateNewRoom() {
+            const signaling = new WebRTCTrackerSignaling('');
+            const newHash = signaling.generateSimpleInfoHash();
+            document.getElementById('infoHash').value = newHash;
+        }
+
+        async function connectToTracker() {
+            const trackerUrl = document.getElementById('trackerUrl').value;
+            updateStatus('connecting');
+            
+            signaling = new WebRTCTrackerSignaling(trackerUrl);
+            
+            // Set up event handlers
+            signaling.onStatusChanged = updateStatus;
+            signaling.onPeerConnected = (peerId) => {
+                signaling.log('🎉 Peer connected: ' + peerId);
+                document.getElementById('sendBtn').disabled = false;
+            };
+            signaling.onMessageReceived = (message, fromPeer) => {
+                signaling.log('💬 Message: ' + message + (fromPeer ? ' from ' + fromPeer : ''));
+            };
+            
+            // Display peer ID
+            document.getElementById('peerIdDisplay').textContent = signaling.peerId;
+            
+            try {
+                await signaling.connect();
+            } catch (error) {
+                updateStatus('disconnected');
+                alert('Failed to connect: ' + error);
+            }
+        }
+
+        function joinRoom() {
+            const infoHash = document.getElementById('infoHash').value;
+            if (!infoHash || infoHash.length !== 20) {
+                alert('Please enter a valid 20-digit info hash');
+                return;
+            }
+            signaling.announceToSwarm(infoHash);
+        }
+
+        function createOffer() {
+            if (signaling) {
+                signaling.createAndSendOffer();
+            }
+        }
+
+        function sendMessage() {
+            const message = document.getElementById('testMessage').value;
+            if (signaling && message) {
+                const sent = signaling.sendMessageToAll(message);
+                if (sent === 0) {
+                    alert('No connected peers to send message to');
+                }
+            }
+        }
+
+        function disconnect() {
+            if (signaling) {
+                signaling.disconnect();
+                signaling = null;
+            }
+            updateStatus('disconnected');
+        }
+
+        // Initialize UI
+        updateStatus('disconnected');
+        generateNewRoom();
+    </script>
+</body>
+</html>
