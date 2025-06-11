@@ -13,7 +13,7 @@ Each device hosts the frontend locally and uses a public tracker for signaling a
    On **both computers**:
 
    ```bash
-   cd /your/project/directory
+   cd webrtc-poc
    python3 -m http.server 8081
    ```
 
